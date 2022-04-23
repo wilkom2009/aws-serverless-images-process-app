@@ -10,6 +10,7 @@ from urllib.parse import unquote_plus
 from boto3.dynamodb.conditions import Key, Attr
 import uuid
 from PIL import Image
+import json
 
 thumbBucket = os.environ['RESIZEDBUCKET']
 
@@ -17,12 +18,12 @@ thumbBucket = os.environ['RESIZEDBUCKET']
 
 minConfidence = 50
 
-"""MinConfidence parameter (float) -- Specifies the minimum confidence level for the labels to return. 
-Amazon Rekognition doesn't return any labels with a confidence lower than this specified value. 
-If you specify a value of 0, all labels are returned, regardless of the default thresholds that the 
+"""MinConfidence parameter (float) -- Specifies the minimum confidence level for the labels to return.
+Amazon Rekognition doesn't return any labels with a confidence lower than this specified value.
+If you specify a value of 0, all labels are returned, regardless of the default thresholds that the
 model version applies."""
 
-## Instantiate service clients outside of handler for context reuse / performance
+# Instantiate service clients outside of handler for context reuse / performance
 
 # Constructor for our s3 client object
 s3_client = boto3.client('s3')
@@ -31,20 +32,27 @@ rekognition_client = boto3.client('rekognition')
 # Constructor for DynamoDB resource object
 dynamodb = boto3.resource('dynamodb')
 
+
 def handler(event, context):
 
     print("Lambda processing event: ", event)
 
     # For each message (photo) get the bucket name and key
-    for record in event['Records']:
-        ourBucket = record['s3']['bucket']['name']
-        ourKey = record['s3']['object']['key']
+    # for record in event['Records']:
+    #     ourBucket = record['s3']['bucket']['name']
+    #     ourKey = record['s3']['object']['key']
+    for response in event['Records']:
+        formatted = json.loads(response['body'])
+        for record in formatted['Records']:
+            ourBucket = record['s3']['bucket']['name']
+            ourKey = record['s3']['object']['key']
 
         # For each bucket/key, retrieve labels
         generateThumb(ourBucket, ourKey)
         rekFunction(ourBucket, ourKey)
 
     return
+
 
 def generateThumb(ourBucket, ourKey):
 
@@ -77,24 +85,26 @@ def generateThumb(ourBucket, ourKey):
 
     return
 
+
 def resize_image(image_path, resized_path):
     with Image.open(image_path) as image:
         image.thumbnail(tuple(x / 2 for x in image.size))
         image.save(resized_path)
 
+
 def rekFunction(ourBucket, ourKey):
-    
+
     # Clean the string to add the colon back into requested name which was substitued by Amplify Library.
     safeKey = replaceSubstringWithColon(ourKey)
-    
+
     print('Currently processing the following image')
     print('Bucket: ' + ourBucket + ' key name: ' + safeKey)
 
     # Try and retrieve labels from Amazon Rekognition, using the confidence level we set in minConfidence var
     try:
-        detectLabelsResults = rekognition_client.detect_labels(Image={'S3Object': {'Bucket':ourBucket, 'Name':safeKey}},
-        MaxLabels=10,
-        MinConfidence=minConfidence)
+        detectLabelsResults = rekognition_client.detect_labels(Image={'S3Object': {'Bucket': ourBucket, 'Name': safeKey}},
+                                                               MaxLabels=10,
+                                                               MinConfidence=minConfidence)
 
     except ClientError as e:
         logging.error(e)
@@ -118,7 +128,6 @@ def rekFunction(ourBucket, ourKey):
         # We now have our shiny new item ready to put into DynamoDB
         imageLabels[itemAtt] = newItem
 
-
     # Instantiate a table resource object of our environment variable
     imageLabelsTable = os.environ['TABLE']
     table = dynamodb.Table(imageLabelsTable)
@@ -132,6 +141,8 @@ def rekFunction(ourBucket, ourKey):
     return
 
 # Clean the string to add the colon back into requested name
+
+
 def replaceSubstringWithColon(txt):
 
     return txt.replace("%3A", ":")
